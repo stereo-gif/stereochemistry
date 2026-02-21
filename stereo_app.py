@@ -35,7 +35,7 @@ if st.button("Analyze Isomers"):
             labels = []
             for i, iso in enumerate(isomers):
                 Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
-                stereo_info = [bond.getStereo().name[-1] for bond in iso.GetBonds() if bond.getStereo() in [Chem.BondStereo.STEREOE, Chem.BondStereo.STEREOZ]]
+                stereo_info = [bond.GetStereo().name[-1] for bond in iso.GetBonds() if bond.getStereo() in [Chem.BondStereo.STEREOE, Chem.BondStereo.STEREOZ]]
                 chiral_centers = Chem.FindMolChiralCenters(iso)
                 for center in chiral_centers:
                     stereo_info.append(f"({center[1]})")
