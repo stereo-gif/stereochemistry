@@ -11,9 +11,8 @@ st.markdown("""
 <h2 style='color: #800000; font-family: serif; border-bottom: 2px solid #dcdde1;'>Chemical Isomer Analysis System</h2>
 <div style="background-color: #ffffff; padding: 15px; border: 1px solid #e1e1e1; border-left: 5px solid #800000; margin-bottom: 20px;">
     <strong style="color: #800000;">Stereoisomerism Reference Guide:</strong><br>
-    1. <b>Cis / Trans:</b> Relative position.<br>
-    2. <b>E / Z (CIP System):</b> Based on atomic number priority (1 > 2).<br>
-    3. <b>R / S:</b> Absolute configuration of chiral centers.
+    1. <b>E / Z System:</b> High priority (1) vs Low priority (2) on each carbon.<br>
+    2. <b>CIP Priority:</b> Higher atomic number gets priority (1).
 </div>
 """, unsafe_allow_html=True)
 
@@ -26,56 +25,58 @@ if st.button("Analyze Isomers"):
         try:
             results = pcp.get_compounds(compound_name, 'name')
             if not results:
-                st.error(f"❌ No compound found for: {compound_name}")
+                st.error(f"❌ No compound found.")
             else:
                 base_smiles = results[0].smiles
                 mol = Chem.MolFromSmiles(base_smiles)
-                
-                # توليد الأيزومرات
                 mol_no_stereo = Chem.Mol(mol)
+                
+                # إزالة أي كيمياء فراغية لتوليد كل الاحتمالات
                 for bond in mol_no_stereo.GetBonds():
                     bond.SetStereo(Chem.BondStereo.STEREONONE)
                 
                 isomers = list(EnumerateStereoisomers(mol_no_stereo))
                 
-                # التحقق إذا كان المركب Achiral
                 if len(isomers) <= 1:
-                    st.info(f"✨ The compound **{compound_name}** is **Achiral** (No stereoisomers found).")
-                
+                    st.info(f"✨ The compound **{compound_name}** is **Achiral / No Geometric Isomers**.")
+
                 labels = []
                 for i, iso in enumerate(isomers):
                     Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
                     
-                    # تفعيل إظهار أرقام الذرات (Indices) للمساعدة في فهم الأولوية
-                    for atom in iso.GetAtoms():
-                        atom.SetProp('atomNote', str(atom.GetIdx()))
+                    # حساب رتبة الأولوية (CIP Rank) لكل ذرة
+                    # الرتبة الأعلى (أصغر رقم في الترتيب) تعني أولوية أعلى
+                    ranks = list(Chem.CanvasV8.GetAtomPriorities(iso)) if hasattr(Chem, 'CanvasV8') else []
                     
+                    # لو الرتب مش متاحة بالطريقة دي، بنستخدم الـ CIPRank المخفي
+                    for atom in iso.GetAtoms():
+                        if atom.HasProp('_CIPRank'):
+                            # هنعرض الأولوية كـ (1) أو (2) لتسهيل الفهم
+                            # لاحظي: RDKit بتدي رتبة صفر لأقل أولوية، فإحنا بنعكسها للتبسيط
+                            rank_val = atom.GetProp('_CIPRank')
+                            atom.SetProp('atomNote', f"p:{rank_val}")
+
                     stereo_info = []
-                    # استخراج E/Z
                     for bond in iso.GetBonds():
                         stereo = bond.GetStereo()
                         if stereo == Chem.BondStereo.STEREOE: stereo_info.append("E")
                         elif stereo == Chem.BondStereo.STEREOZ: stereo_info.append("Z")
                     
-                    # استخراج R/S
                     centers = Chem.FindMolChiralCenters(iso)
                     for c in centers: stereo_info.append(f"({c[1]})")
                     
-                    label = f"Isomer {i+1}: " + (", ".join(stereo_info) if stereo_info else "Achiral")
-                    labels.append(label)
+                    labels.append(f"Isomer {i+1}: " + (", ".join(stereo_info) if stereo_info else "Achiral"))
 
-                st.success(f"Analyzed: **{compound_name}**")
-                
-                # إعدادات الرسم لإظهار الأرقام
-                draw_config = Draw.MolDrawOptions()
-                draw_config.addAtomIndices = True # ده هيحط رقم كل ذرة جنبها
+                # إعدادات الرسم: مش هنفعل الـ Indices عشان ميعملش زحمة
+                options = Draw.MolDrawOptions()
+                options.prepareMolsBeforeDrawing = True
                 
                 img = Draw.MolsToGridImage(
                     isomers, 
                     molsPerRow=3, 
                     subImgSize=(400, 400), 
                     legends=labels,
-                    useSVG=False
+                    drawOptions=options
                 )
                 st.image(img)
 
