@@ -1,50 +1,24 @@
 import streamlit as st
 import pubchempy as pcp
 from rdkit import Chem
-from rdkit.Chem import AllChem, Draw
+from rdkit.Chem import AllChem, Draw, EnumerateStereoisomers
 import py3Dmol
 
 # 1. إعدادات الصفحة
 st.set_page_config(page_title="TriStereo - Chemical Isomer Analysis", layout="wide")
 
-# 2. تصميم الواجهة (CSS)
+# 2. تصميم الواجهة
 st.markdown("""
 <style>
-    .main-title { color: #800000; font-family: 'serif'; border-bottom: 2px solid #dcdde1; text-align: center; padding-bottom: 10px; }
-    .guide-box { background-color: #f9f9f9; padding: 15px; border-left: 5px solid #800000; border-radius: 5px; margin-bottom: 20px; }
-    .stButton>button { width: 100%; border-radius: 10px; background-color: #800000; color: white; height: 3em; font-weight: bold; }
-    .stTabs [aria-selected="true"] { background-color: #800000 !important; color: white !important; }
+    .main-title { color: #800000; font-family: 'serif'; border-bottom: 2px solid #dcdde1; text-align: center; }
+    .stButton>button { background-color: #800000; color: white; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("<h1 class='main-title'>TriStereo: Chemical Isomer Analysis</h1>", unsafe_allow_html=True)
 
-# 3. الدليل المرجعي
-with st.expander("📝 Stereoisomerism Quick Reference Guide"):
-    st.markdown("""
-    <div class="guide-box">
-    1. <b>Cis / Trans:</b> Identical groups on same/opposite sides.<br>
-    2. <b>E / Z:</b> Priority-based (CIP System). Together (Z) or opposite (E).<br>
-    3. <b>R / S:</b> Absolute configuration of chiral centers.
-    </div>
-    """, unsafe_allow_html=True)
-
-# 4. البحث
+# 3. البحث
 compound_name = st.text_input("🔍 Enter Compound Name:")
-
-def render_3d(smiles):
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        mol = Chem.AddHs(mol)
-        AllChem.EmbedMolecule(mol)
-        mblock = Chem.MolToMolBlock(mol)
-        view = py3Dmol.view(width=800, height=400)
-        view.addModel(mblock, 'mol')
-        view.setStyle({'stick': {}, 'sphere': {'radius': 0.3}})
-        view.zoomTo()
-        return view._make_html()
-    except:
-        return "<b>3D model generation failed.</b>"
 
 if compound_name:
     try:
@@ -53,50 +27,71 @@ if compound_name:
             c = results[0]
             smiles = c.isomeric_smiles
             mol = Chem.MolFromSmiles(smiles)
+            
+            # --- تحليل الأيزومرات (Cis/Trans & R/S) ---
+            Chem.AssignStereochemistry(mol, force=True, cleanIt=True)
             chiral_centers = Chem.FindMolChiralCenters(mol, includeUnassigned=True)
             
+            # كشف الروابط الثنائية (E/Z - Cis/Trans)
+            has_double_bond_stereo = False
+            for bond in mol.getBonds():
+                if bond.getStereo() != Chem.BondStereo.STEREONONE:
+                    has_double_bond_stereo = True
+                    break
+
+            # عرض النتائج
             m1, m2, m3 = st.columns(3)
             m1.metric("Formula", c.molecular_formula)
-            m2.metric("Status", "Chiral 🧬" if chiral_centers else "Achiral ✨")
+            
+            # تحديد الحالة بناءً على التحليل
+            if chiral_centers and has_double_bond_stereo:
+                status = "R/S & E/Z Active"
+            elif chiral_centers:
+                status = "Chiral (R/S)"
+            elif has_double_bond_stereo:
+                status = "Geometric (E/Z)"
+            else:
+                status = "Achiral"
+            
+            m2.metric("Stereo Type", status)
             m3.metric("Chiral Centers", len(chiral_centers))
+
+            # تنبيه المستخدم لنوع الأيزومر
+            if has_double_bond_stereo:
+                st.success("✅ This molecule has Geometric Isomers (Cis/Trans or E/Z)!")
+            if chiral_centers:
+                st.info(f"🧬 This molecule has Optical Isomers (R/S) at centers: {chiral_centers}")
 
             st.divider()
 
-            tab1, tab2, tab3 = st.tabs(["🖼️ Main Visuals", "📏 Projections", "📋 Molecular Data"])
+            tab1, tab2 = st.tabs(["🌐 Visuals", "📏 Projections Info"])
 
             with tab1:
-                col_left, col_right = st.columns(2)
-                with col_left:
-                    st.subheader("2D Structure")
-                    st.image(Draw.MolToImage(mol, size=(400, 400)))
-                with col_right:
-                    st.subheader("3D Interactive Model")
-                    st.components.v1.html(render_3d(smiles), height=420)
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.image(Draw.MolToImage(mol, size=(400, 400)), caption="2D Structure")
+                with col2:
+                    # عرض الـ 3D
+                    mol_3d = Chem.AddHs(mol)
+                    AllChem.EmbedMolecule(mol_3d)
+                    mblock = Chem.MolToMolBlock(mol_3d)
+                    view = py3Dmol.view(width=400, height=400)
+                    view.addModel(mblock, 'mol')
+                    view.setStyle({'stick': {}, 'sphere': {'radius': 0.3}})
+                    view.zoomTo()
+                    st.components.v1.html(view._make_html(), height=400)
 
             with tab2:
-                st.subheader("Structural Projections")
-                p1, p2, p3 = st.columns(3)
-                
-                with p1:
-                    if st.button("Generate Fischer"):
-                        st.info("Fischer Projection View")
-                        st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/Fischer_projection_example.svg/250px-Fischer_projection_example.svg.png")
+                st.subheader("Projection Analysis")
+                if st.button("Analyze for Fischer/Newman"):
+                    st.write("Checking if the molecule can be represented...")
+                    if len(chiral_centers) > 0:
+                        st.write("- **Fischer:** Possible (Chiral centers detected).")
+                    if mol.getBondBetweenAtoms(0, 1): # مثال بسيط
+                        st.write("- **Newman:** Look down C1-C2 bond.")
+                    st.warning("Note: Dynamic drawing for Fischer/Newman is under development. Use 3D view to visualize angles.")
 
-                with p2:
-                    if st.button("Generate Newman"):
-                        st.info("Newman Projection View")
-                        st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Staggered_conformation.svg/250px-Staggered_conformation.svg.png")
-
-                with p3:
-                    if st.button("Generate Sawhorse"):
-                        st.info("Sawhorse Projection View")
-                        st.write("Visualizing spatial arrangement from side-angle...")
-
-            with tab3:
-                st.json(c.to_dict())
         else:
             st.error("Compound not found.")
     except Exception as e:
         st.error(f"Error: {e}")
-else:
-    st.info("Enter a chemical name to begin.")
