@@ -1,9 +1,10 @@
 import streamlit as st
 import pubchempy as pcp
 from rdkit import Chem
-from rdkit.Chem import Draw
+from rdkit.Chem import Draw, AllChem
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 
+# 1. إعدادات الصفحة
 st.set_page_config(page_title="Chemical Isomer Analysis", layout="wide")
 
 st.markdown("""
@@ -23,6 +24,7 @@ if st.button("Analyze Isomers"):
         st.warning("Please enter a name.")
     else:
         try:
+            # جلب المركب من PubChem
             results = pcp.get_compounds(compound_name, 'name')
             if not results:
                 st.error("Compound not found.")
@@ -30,45 +32,61 @@ if st.button("Analyze Isomers"):
                 base_smiles = results[0].smiles
                 mol = Chem.MolFromSmiles(base_smiles)
                 
-                # --- الخطوة السحرية للألّينات (Allenes) ---
-                # بنورّر على ذرة الكربون اللي في النص (مرتبطة بـ 2 روابط ثنائية)
-                for atom in mol.GetAtoms():
-                    if atom.GetSymbol() == 'C':
-                        double_bonds = [b for b in atom.GetBonds() if b.GetBondType() == Chem.rdchem.BondType.DOUBLE]
-                        if len(double_bonds) == 2:
-                            # بنعلم الذرة دي إنها محتمل تكون "Centric" للألّين
-                            atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW) 
+                # --- التعديل الجذري لحل مشكلة الألّين ---
+                # 1. إضافة هيدروجينات (مهم جداً للـ Allenes عشان الزوايا تبان)
+                mol = Chem.AddHs(mol)
                 
-                # تنظيف الـ Stereo لإعادة الحساب
-                mol_no_stereo = Chem.Mol(mol)
-                Chem.AssignStereochemistry(mol_no_stereo, force=True, cleanIt=True)
+                # 2. مسح أي معلومات فراغية قديمة
+                Chem.RemoveStereochemistry(mol)
                 
-                # استخدام خيار الـ Embedding لمحاكاة الشكل الفراغي المتعامد للألّين
+                # 3. تفعيل البحث عن مراكز الكايرالية المحورية والروابط
+                # نستخدم الـ Flag الخاص بالـ Allenes
+                Chem.FindPotentialStereoBonds(mol)
+                
+                # 4. إعداد خيارات التوليد مع إجبار البرنامج على فحص الـ 3D
                 options = StereoEnumerationOptions(tryEmbedding=True, onlyUnassigned=False)
-                isomers = list(EnumerateStereoisomers(mol_no_stereo, options=options))
-                # ---------------------------------------
+                isomers = list(EnumerateStereoisomers(mol, options=options))
+                
+                # لو لسه مش شايف أيزومرز، بنجرب طريقة "التلاعب بالروابط"
+                if len(isomers) == 1:
+                    # محاولة يدوية لتحديد روابط الألّين كـ Bonds قابلة للتغير
+                    for bond in mol.GetBonds():
+                        if bond.GetBondType() == Chem.rdchem.BondType.DOUBLE:
+                            bond.SetStereo(Chem.BondStereo.STEREONONE)
+                    isomers = list(EnumerateStereoisomers(mol, options=options))
 
                 labels = []
+                final_mols = []
                 for i, iso in enumerate(isomers):
-                    Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
-                    info = []
+                    # إزالة الهيدروجينات للرسم النظيف بعد الحساب
+                    clean_iso = Chem.RemoveHs(iso)
+                    Chem.AssignStereochemistry(clean_iso, force=True, cleanIt=True)
                     
-                    # كشف الـ R/S (بما في ذلك الـ Axial chirality للألّين)
-                    centers = Chem.FindMolChiralCenters(iso, includeUnassigned=True)
+                    info = []
+                    # البحث عن R/S أو Axial Chirality
+                    centers = Chem.FindMolChiralCenters(clean_iso, includeUnassigned=True)
                     for c in centers:
                         info.append(f"({c[1]})")
-                        
-                    for b in iso.GetBonds():
+                    
+                    # البحث عن E/Z
+                    for b in clean_iso.GetBonds():
                         if b.GetStereo() == Chem.BondStereo.STEREOE: info.append("E")
                         elif b.GetStereo() == Chem.BondStereo.STEREOZ: info.append("Z")
                     
                     label = f"Isomer {i+1}: " + (", ".join(set(info)) if info else "Achiral")
                     labels.append(label)
+                    final_mols.append(clean_iso)
 
                 st.success(f"Found **{len(isomers)}** forms for {compound_name}")
                 
-                img = Draw.MolsToGridImage(isomers, molsPerRow=2, subImgSize=(400, 400), legends=labels)
-                st.image(img, use_container_width=True)
+                img = Draw.MolsToGridImage(
+                    final_mols, 
+                    molsPerRow=2, 
+                    subImgSize=(400, 400), 
+                    legends=labels,
+                    useSVG=True # SVG بيخلي الخطوط أوضح في الـ Allenes
+                )
+                st.write(img, unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"Error: {e}")
