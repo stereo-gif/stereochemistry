@@ -1,117 +1,129 @@
-           import streamlit as st
+import streamlit as st
 import pubchempy as pcp
 from rdkit import Chem
 from rdkit.Chem import Draw, AllChem, EnumerateStereoisomers
-from stmol import showmol
 import py3Dmol
 import numpy as np
 
 # ==============================
-# 1. Allene Detection Logic
+# 1. الدالة السحرية لحساب Ra/Sa للألين
 # ==============================
-def get_allene_config(mol):
-    """يكشف محاور الألين ويحدد Ra/Sa لكل محور"""
-    axes_configs = []
-    # لازم يكون عندنا 3D عشان نحسب الـ Ra/Sa
-    mol_3d = Chem.AddHs(mol)
-    if AllChem.EmbedMolecule(mol_3d, AllChem.ETKDG()) == -1:
-        return []
-
-    for bond in mol_3d.GetBonds():
+def get_allene_label(iso_mol):
+    """بتحسب الـ Axial Chirality لكل أيزومر على حدة"""
+    # لازم نعمل نسخة ونضيف هيدروجين ونثبت الشكل 3D
+    m = Chem.AddHs(iso_mol)
+    if AllChem.EmbedMolecule(m, AllChem.ETKDG()) == -1:
+        return ""
+    
+    AllChem.MMFFOptimizeMolecule(m)
+    conf = m.GetConformer()
+    
+    labels = []
+    for bond in m.GetBonds():
         if bond.GetBondType() == Chem.BondType.DOUBLE:
             a1 = bond.GetBeginAtom()
             a2 = bond.GetEndAtom()
-            # نبحث عن ذرة كربون في النص بين رابطتين مزدوجتين
-            for next_bond in a2.GetBonds():
-                if next_bond.GetIdx() == bond.GetIdx(): continue
-                if next_bond.GetBondType() == Chem.BondType.DOUBLE:
-                    a3 = next_bond.GetOtherAtom(a2)
+            # البحث عن المركز (C=C=C)
+            for n_bond in a2.GetBonds():
+                if n_bond.GetIdx() == bond.GetIdx(): continue
+                if n_bond.GetBondType() == Chem.BondType.DOUBLE:
+                    a3 = n_bond.GetOtherAtom(a2)
                     
-                    # كشف الأطراف (Substituents)
-                    left_subs = [n for n in a1.GetNeighbors() if n.GetIdx() != a2.GetIdx()]
-                    right_subs = [n for n in a3.GetNeighbors() if n.GetIdx() != a2.GetIdx()]
+                    # تحديد المجموعات ذات الأولوية
+                    def get_high_priority(atom, exclude_idx):
+                        subs = [n for n in atom.GetNeighbors() if n.GetIdx() != exclude_idx]
+                        if not subs: return None
+                        return sorted(subs, key=lambda x: x.GetAtomicNum(), reverse=True)[0]
                     
-                    if len(left_subs) >= 2 and len(right_subs) >= 2:
-                        # ترتيب حسب الأولوية (Atomic Number)
-                        l_high = sorted(left_subs, key=lambda x: x.GetAtomicNum(), reverse=True)[0]
-                        r_high = sorted(right_subs, key=lambda x: x.GetAtomicNum(), reverse=True)[0]
+                    l_sub = get_high_priority(a1, a2.GetIdx())
+                    r_sub = get_high_priority(a3, a2.GetIdx())
+                    
+                    if l_sub and r_sub:
+                        # حساب المتجهات (Vector Math)
+                        p1 = np.array(conf.GetAtomPosition(a1.GetIdx()))
+                        p3 = np.array(conf.GetAtomPosition(a3.GetIdx()))
+                        pl = np.array(conf.GetAtomPosition(l_sub.GetIdx()))
+                        pr = np.array(conf.GetAtomPosition(r_sub.GetIdx()))
                         
-                        conf = mol_3d.GetConformer()
-                        def get_p(atom): return np.array(conf.GetAtomPosition(atom.GetIdx()))
+                        v_axis = p3 - p1
+                        v_l = pl - p1
+                        v_r = pr - p3
                         
-                        # المتجهات
-                        v_axis = get_p(a3) - get_p(a1)
-                        v_l = get_p(l_high) - get_p(a1)
-                        v_r = get_p(r_high) - get_p(a3)
-                        
+                        # ضرب اتجاهي لتحديد الالتفاف
                         dot = np.dot(np.cross(v_l, v_axis), v_r)
-                        config = "Ra" if dot > 0 else "Sa"
-                        axes_configs.append(f"Axis({a1.GetIdx()}-{a3.GetIdx()}): {config}")
-    return axes_configs
+                        labels.append("Ra" if dot > 0 else "Sa")
+    
+    return " | ".join(labels) if labels else ""
 
 # ==============================
-# 2. 3D Renderer Fix
+# 2. عرض الـ 3D بطريقة مضمونة
 # ==============================
-def make_3d_viewer(mol, width=400, height=300):
-    """يضمن ظهور الـ 3D عبر تحويله لـ Block سليم"""
+def show_3d_render(mol):
+    """بتعرض الـ 3D باستخدام py3Dmol داخل Streamlit"""
     m = Chem.AddHs(mol)
     AllChem.EmbedMolecule(m, AllChem.ETKDG())
-    AllChem.MMFFOptimizeMolecule(m)
     m_block = Chem.MolToMolBlock(m)
     
-    view = py3Dmol.view(width=width, height=height)
-    view.addModel(m_block, 'mol')
-    view.setStyle({'stick': {'colorscheme': 'Jmol', 'radius': 0.15}, 'sphere': {'scale': 0.25}})
-    view.zoomTo()
-    return view
+    # بناء الـ HTML الخاص بـ py3Dmol
+    xyzview = py3Dmol.view(width=400, height=300)
+    xyzview.addModel(m_block, 'mol')
+    xyzview.setStyle({'stick': {'radius': 0.2}, 'sphere': {'scale': 0.3}})
+    xyzview.zoomTo()
+    
+    # تحويل العرض لـ HTML عشان يظهر في Streamlit
+    obj = xyzview._make_html()
+    st.components.v1.html(obj, height=350)
 
 # ==============================
-# 3. Streamlit Interface
+# 3. واجهة البرنامج
 # ==============================
-st.set_page_config(page_title="Stereo-Explorer 2026", layout="wide")
-st.title("🔬 Stereo-Isomer Professional Analyzer")
+st.set_page_config(page_title="Chemical Isomer Pro 2026", layout="wide")
+st.markdown("<h2 style='text-align: center; color: #4A90E2;'>Stereo Analysis System</h2>", unsafe_allow_html=True)
 
-name = st.text_input("Structure Name:", value="2,3-pentadiene")
+compound_name = st.text_input("Structure Name:", "2,3-pentadiene")
 
-if st.button("Analyze Now"):
+if st.button("Start Analysis"):
     try:
-        results = pcp.get_compounds(name, 'name')
+        results = pcp.get_compounds(compound_name, 'name')
         if not results:
             st.error("Compound not found.")
         else:
-            smiles = results[0].smiles
-            main_mol = Chem.MolFromSmiles(smiles)
+            base_mol = Chem.MolFromSmiles(results[0].smiles)
             
-            # توليد جميع الأيزومرات
-            isomers = list(EnumerateStereoisomers.EnumerateStereoisomers(main_mol))
+            # 1. تصفير أي استيريو موجود
+            m_unspec = Chem.Mol(base_mol)
+            for b in m_unspec.GetBonds(): b.SetStereo(Chem.BondStereo.STEREONONE)
+            for a in m_unspec.GetAtoms(): a.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
             
-            st.success(f"Successfully generated {len(isomers)} isomers.")
+            # 2. توليد الأيزومرات
+            isomers = list(EnumerateStereoisomers.EnumerateStereoisomers(m_unspec))
             
-            # العرض في أعمدة
-            cols = st.columns(2) # خليناها 2 عشان الـ 3D ياخد مساحته
+            st.info(f"Analyzed {compound_name}: Found {len(isomers)} potential isomers.")
             
+            # 3. العرض
+            cols = st.columns(2)
             for i, iso in enumerate(isomers):
                 with cols[i % 2]:
-                    st.markdown(f"### Isomer {i+1}")
+                    st.subheader(f"Isomer #{i+1}")
                     
-                    # حساب الخصائص
+                    # حساب الـ R/S العادي
                     Chem.AssignStereochemistry(iso, force=True)
-                    rs_centers = Chem.FindMolChiralCenters(iso)
-                    allene_data = get_allene_config(iso)
+                    rs = Chem.FindMolChiralCenters(iso)
                     
-                    # كتابة البيانات
-                    st.write(f"**R/S Centers:** {rs_centers if rs_centers else 'None'}")
-                    if allene_data:
-                        st.info(f"**Axial Chirality:** {allene_data}")
+                    # حساب الـ Ra/Sa للألين (هنا التعديل المهم)
+                    axial = get_allene_label(iso)
                     
-                    # عرض 2D
+                    # عرض البيانات (إيه اللي موجود في الجزيء ده؟)
+                    if rs: st.write(f"**Chiral Centers (R/S):** `{rs}`")
+                    if axial: st.success(f"**Axial Chirality (Ra/Sa):** `{axial}`")
+                    if not rs and not axial: st.write("No specific stereocenters detected.")
+                    
+                    # الـ 2D
                     st.image(Draw.MolToImage(iso, size=(400, 400)))
                     
-                    # عرض 3D
-                    st.write("**Interactive 3D View:**")
-                    view = make_3d_viewer(iso)
-                    showmol(view, height=300, width=400)
+                    # الـ 3D (الآن شغال بإذن الله)
+                    show_3d_render(iso)
                     st.divider()
-                    
+
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Something went wrong: {e}")
