@@ -1,5 +1,7 @@
-rdkit
+streamlit
 pubchempy
-py3Dmol
+rdkit
 stmol
-numpy
+py3Dmol
+ipython_genutils
+ipywidgets
