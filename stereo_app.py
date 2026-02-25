@@ -6,72 +6,78 @@ from stmol import showmol
 import py3Dmol
 import numpy as np
 
-# دالة لحساب الـ Ra/Sa للألين
-def get_allene_label(mol):
+# ==============================
+# 1. دالة الـ Ra/Sa (بسيطة ومستقرة)
+# ==============================
+def get_allene_config(mol):
+    # بنعمل نسخة عشان منبوظش الجزيء الأصلي
     m = Chem.AddHs(mol)
     if AllChem.EmbedMolecule(m, AllChem.ETKDG()) == -1: return ""
     conf = m.GetConformer()
-    results = []
-    for b in m.GetBonds():
-        if b.GetBondType() == Chem.BondType.DOUBLE:
-            a1, a2 = b.GetBeginAtom(), b.GetEndAtom()
+    
+    for bond in m.GetBonds():
+        if bond.GetBondType() == Chem.BondType.DOUBLE:
+            a1, a2 = bond.GetBeginAtom(), bond.GetEndAtom()
             for nb in a2.GetBonds():
-                if nb.GetIdx() == b.GetIdx(): continue
+                if nb.GetIdx() == bond.GetIdx(): continue
                 if nb.GetBondType() == Chem.BondType.DOUBLE:
                     a3 = nb.GetOtherAtom(a2)
-                    l_subs = sorted([n for n in a1.GetNeighbors() if n.GetIdx()!=a2.GetIdx()], key=lambda x: x.GetAtomicNum(), reverse=True)
-                    r_subs = sorted([n for n in a3.GetNeighbors() if n.GetIdx()!=a2.GetIdx()], key=lambda x: x.GetAtomicNum(), reverse=True)
-                    if len(l_subs)>0 and len(r_subs)>0:
-                        v_ax = np.array(conf.GetAtomPosition(a3.GetIdx())) - np.array(conf.GetAtomPosition(a1.GetIdx()))
-                        v_l = np.array(conf.GetAtomPosition(l_subs[0].GetIdx())) - np.array(conf.GetAtomPosition(a1.GetIdx()))
-                        v_r = np.array(conf.GetAtomPosition(r_subs[0].GetIdx())) - np.array(conf.GetAtomPosition(a3.GetIdx()))
-                        dot = np.dot(np.cross(v_l, v_ax), v_r)
-                        results.append("Ra" if dot > 0 else "Sa")
-    return " | ".join(results)
+                    l_subs = sorted([n for n in a1.GetNeighbors() if n.GetIdx() != a2.GetIdx()], key=lambda x: x.GetAtomicNum(), reverse=True)
+                    r_subs = sorted([n for n in a3.GetNeighbors() if n.GetIdx() != a2.GetIdx()], key=lambda x: x.GetAtomicNum(), reverse=True)
+                    if l_subs and r_subs:
+                        p1, p3 = np.array(conf.GetAtomPosition(a1.GetIdx())), np.array(conf.GetAtomPosition(a3.GetIdx()))
+                        pl, pr = np.array(conf.GetAtomPosition(l_subs[0].GetIdx())), np.array(conf.GetAtomPosition(r_subs[0].GetIdx()))
+                        dot = np.dot(np.cross(pl-p1, p3-p1), pr-p3)
+                        return "Ra" if dot > 0 else "Sa"
+    return ""
 
-# دالة عرض الـ 3D
+# ==============================
+# 2. دالة الـ 3D (اللي كانت شغالة معاكي)
+# ==============================
 def render_3d(mol):
-    m = Chem.AddHs(mol)
-    AllChem.EmbedMolecule(m, AllChem.ETKDG())
-    m_block = Chem.MolToMolBlock(m)
+    mol_3d = Chem.AddHs(mol)
+    AllChem.EmbedMolecule(mol_3d, AllChem.ETKDG())
+    mblock = Chem.MolToMolBlock(mol_3d)
     view = py3Dmol.view(width=400, height=300)
-    view.addModel(m_block, 'mol')
+    view.addModel(mblock, 'mol')
     view.setStyle({'stick': {}, 'sphere': {'scale': 0.3}})
     view.zoomTo()
     showmol(view, height=300, width=400)
 
-st.title("Advanced Chemical Isomer Analyzer")
+# ==============================
+# 3. واجهة البرنامج
+# ==============================
+st.set_page_config(layout="wide")
+st.title("Isomer Analyzer 2.0")
 
-name = st.text_input("Enter Molecule Name:", "2,3-pentadiene")
+name = st.text_input("Enter Compound Name:", "2,3-pentadiene")
 
 if st.button("Analyze"):
     results = pcp.get_compounds(name, 'name')
     if results:
-        smiles = results[0].smiles
-        mol = Chem.MolFromSmiles(smiles)
+        # تحويل الـ SMILES لجزيء وتوليد الأيزومرات
+        base_mol = Chem.MolFromSmiles(results[0].smiles)
+        isomers = list(EnumerateStereoisomers.EnumerateStereoisomers(base_mol))
         
-        # أهم خطوة: السماح بفك التشفير لكل الاحتمالات
-        opts = EnumerateStereoisomers.StereoEnumerationOptions(tryEmbedding=True)
-        isomers = list(EnumerateStereoisomers.EnumerateStereoisomers(mol, options=opts))
+        st.write(f"Found {len(isomers)} Isomers")
         
         cols = st.columns(2)
         for i, iso in enumerate(isomers):
             with cols[i % 2]:
-                # إجبار RDKit على حساب الـ R/S
-                Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
-                # نستخدم includeUnassigned=True للتأكد من فحص كل الذرات
+                # إجبار حساب الـ R/S
+                Chem.AssignStereochemistry(iso, force=True)
                 centers = Chem.FindMolChiralCenters(iso, includeUnassigned=True)
-                axial = get_allene_label(iso)
+                axial = get_allene_config(iso)
                 
-                st.subheader(f"Isomer {i+1}")
-                st.write(f"**Centers:** {centers}")
-                if axial: st.success(f"**Axial:** {axial}")
+                # العنوان والـ Labels
+                label = f"Isomer {i+1} | R/S: {centers}"
+                if axial: label += f" | Axial: {axial}"
                 
-                # عرض 2D
-                st.image(Draw.MolToImage(iso, size=(300, 300)))
+                st.subheader(label)
                 
-                # عرض 3D
-                try:
-                    render_3d(iso)
-                except:
-                    st.error("3D Render Failed")
+                # الـ 2D
+                st.image(Draw.MolToImage(iso, size=(300,300)))
+                
+                # الـ 3D
+                render_3d(iso)
+                st.divider()
