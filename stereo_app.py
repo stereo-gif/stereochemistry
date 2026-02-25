@@ -1,4 +1,4 @@
-import streamlit as st
+           import streamlit as st
 import pubchempy as pcp
 from rdkit import Chem
 from rdkit.Chem import Draw, AllChem, EnumerateStereoisomers
@@ -7,122 +7,111 @@ import py3Dmol
 import numpy as np
 
 # ==============================
-# 1. Allene Detection Functions
+# 1. Allene Detection Logic
 # ==============================
-def detect_allene_axes(mol):
-    """كشف محاور الألين في الجزيء"""
-    axes = []
-    for bond1 in mol.GetBonds():
-        if bond1.GetBondType() != Chem.BondType.DOUBLE: continue
-        a1 = bond1.GetBeginAtom()
-        a2 = bond1.GetEndAtom()
-        for bond2 in a2.GetBonds():
-            if bond2.GetIdx() == bond1.GetIdx(): continue
-            if bond2.GetBondType() != Chem.BondType.DOUBLE: continue
-            a3 = bond2.GetOtherAtom(a2)
-            if a1.GetSymbol()=="C" and a2.GetSymbol()=="C" and a3.GetSymbol()=="C":
-                l_subs = [n.GetIdx() for n in a1.GetNeighbors() if n.GetIdx()!=a2.GetIdx()]
-                r_subs = [n.GetIdx() for n in a3.GetNeighbors() if n.GetIdx()!=a2.GetIdx()]
-                if len(l_subs)==2 and len(r_subs)==2:
-                    axes.append((a1.GetIdx(), a2.GetIdx(), a3.GetIdx()))
-    return axes
+def get_allene_config(mol):
+    """يكشف محاور الألين ويحدد Ra/Sa لكل محور"""
+    axes_configs = []
+    # لازم يكون عندنا 3D عشان نحسب الـ Ra/Sa
+    mol_3d = Chem.AddHs(mol)
+    if AllChem.EmbedMolecule(mol_3d, AllChem.ETKDG()) == -1:
+        return []
 
-def assign_allene_ra_sa(mol, axis):
-    """حساب التماثل المحوري Ra/Sa"""
+    for bond in mol_3d.GetBonds():
+        if bond.GetBondType() == Chem.BondType.DOUBLE:
+            a1 = bond.GetBeginAtom()
+            a2 = bond.GetEndAtom()
+            # نبحث عن ذرة كربون في النص بين رابطتين مزدوجتين
+            for next_bond in a2.GetBonds():
+                if next_bond.GetIdx() == bond.GetIdx(): continue
+                if next_bond.GetBondType() == Chem.BondType.DOUBLE:
+                    a3 = next_bond.GetOtherAtom(a2)
+                    
+                    # كشف الأطراف (Substituents)
+                    left_subs = [n for n in a1.GetNeighbors() if n.GetIdx() != a2.GetIdx()]
+                    right_subs = [n for n in a3.GetNeighbors() if n.GetIdx() != a2.GetIdx()]
+                    
+                    if len(left_subs) >= 2 and len(right_subs) >= 2:
+                        # ترتيب حسب الأولوية (Atomic Number)
+                        l_high = sorted(left_subs, key=lambda x: x.GetAtomicNum(), reverse=True)[0]
+                        r_high = sorted(right_subs, key=lambda x: x.GetAtomicNum(), reverse=True)[0]
+                        
+                        conf = mol_3d.GetConformer()
+                        def get_p(atom): return np.array(conf.GetAtomPosition(atom.GetIdx()))
+                        
+                        # المتجهات
+                        v_axis = get_p(a3) - get_p(a1)
+                        v_l = get_p(l_high) - get_p(a1)
+                        v_r = get_p(r_high) - get_p(a3)
+                        
+                        dot = np.dot(np.cross(v_l, v_axis), v_r)
+                        config = "Ra" if dot > 0 else "Sa"
+                        axes_configs.append(f"Axis({a1.GetIdx()}-{a3.GetIdx()}): {config}")
+    return axes_configs
+
+# ==============================
+# 2. 3D Renderer Fix
+# ==============================
+def make_3d_viewer(mol, width=400, height=300):
+    """يضمن ظهور الـ 3D عبر تحويله لـ Block سليم"""
+    m = Chem.AddHs(mol)
+    AllChem.EmbedMolecule(m, AllChem.ETKDG())
+    AllChem.MMFFOptimizeMolecule(m)
+    m_block = Chem.MolToMolBlock(m)
+    
+    view = py3Dmol.view(width=width, height=height)
+    view.addModel(m_block, 'mol')
+    view.setStyle({'stick': {'colorscheme': 'Jmol', 'radius': 0.15}, 'sphere': {'scale': 0.25}})
+    view.zoomTo()
+    return view
+
+# ==============================
+# 3. Streamlit Interface
+# ==============================
+st.set_page_config(page_title="Stereo-Explorer 2026", layout="wide")
+st.title("🔬 Stereo-Isomer Professional Analyzer")
+
+name = st.text_input("Structure Name:", value="2,3-pentadiene")
+
+if st.button("Analyze Now"):
     try:
-        left_idx, center_idx, right_idx = axis
-        # إضافة هيدروجين وتوليد شكل 3D ضروري للحساب
-        mol_3d = Chem.AddHs(mol)
-        if AllChem.EmbedMolecule(mol_3d, AllChem.ETKDG()) == -1: return "Error"
-        
-        conf = mol_3d.GetConformer()
-        left_atom = mol_3d.GetAtomWithIdx(left_idx)
-        right_atom = mol_3d.GetAtomWithIdx(right_idx)
-        
-        l_subs = sorted([n for n in left_atom.GetNeighbors() if n.GetIdx()!=center_idx], 
-                        key=lambda x: x.GetAtomicNum(), reverse=True)
-        r_subs = sorted([n for n in right_atom.GetNeighbors() if n.GetIdx()!=center_idx], 
-                        key=lambda x: x.GetAtomicNum(), reverse=True)
-        
-        def vec(a_idx, b_idx):
-            return np.array(conf.GetAtomPosition(b_idx)) - np.array(conf.GetAtomPosition(a_idx))
-        
-        axis_v = vec(left_idx, right_idx)
-        l_v = vec(left_idx, l_subs[0].GetIdx())
-        r_v = vec(right_idx, r_subs[0].GetIdx())
-        
-        dot = np.dot(np.cross(l_v, axis_v), r_v)
-        return "Ra" if dot > 0 else "Sa"
-    except:
-        return "N/A"
-
-# ==============================
-# 2. Visualization Logic
-# ==============================
-def render_3d_safe(mol, title):
-    """دالة عرض الـ 3D مع التأكد من توليد الـ Conformers"""
-    try:
-        mol_3d = Chem.AddHs(mol)
-        AllChem.EmbedMolecule(mol_3d, AllChem.ETKDG())
-        mblock = Chem.MolToMolBlock(mol_3d)
-        view = py3Dmol.view(width=400, height=300)
-        view.addModel(mblock, 'mol')
-        view.setStyle({'stick': {}, 'sphere': {'scale': 0.3}})
-        view.zoomTo()
-        st.write(f"**{title}**")
-        showmol(view, height=300, width=400)
-    except:
-        st.error(f"Could not render 3D for {title}")
-
-# ==============================
-# 3. Streamlit UI
-# ==============================
-st.set_page_config(page_title="StereoMaster Pro", layout="wide")
-st.title("🧪 Advanced Stereo Analysis (R/S, E/Z, Ra/Sa)")
-
-compound_name = st.text_input("Enter Compound Name (e.g. 2,3-pentadiene):")
-
-if st.button("Run Analysis"):
-    if compound_name:
-        with st.spinner("Processing..."):
-            comps = pcp.get_compounds(compound_name, 'name')
-            if not comps:
-                st.error("Not found in PubChem.")
-            else:
-                base_smiles = comps[0].smiles
-                mol = Chem.MolFromSmiles(base_smiles)
-                
-                # توليد الـ Isomers
-                mol_unspec = Chem.Mol(mol)
-                for b in mol_unspec.GetBonds(): b.SetStereo(Chem.BondStereo.STEREONONE)
-                for a in mol_unspec.GetAtoms(): a.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
-                
-                isomers = list(EnumerateStereoisomers.EnumerateStereoisomers(mol_unspec))
-                
-                st.subheader(f"Found {len(isomers)} Isomers")
-                
-                cols_2d = st.columns(len(isomers) if len(isomers) < 4 else 4)
-                
-                for i, iso in enumerate(isomers):
-                    # حساب الـ R/S العادي
+        results = pcp.get_compounds(name, 'name')
+        if not results:
+            st.error("Compound not found.")
+        else:
+            smiles = results[0].smiles
+            main_mol = Chem.MolFromSmiles(smiles)
+            
+            # توليد جميع الأيزومرات
+            isomers = list(EnumerateStereoisomers.EnumerateStereoisomers(main_mol))
+            
+            st.success(f"Successfully generated {len(isomers)} isomers.")
+            
+            # العرض في أعمدة
+            cols = st.columns(2) # خليناها 2 عشان الـ 3D ياخد مساحته
+            
+            for i, iso in enumerate(isomers):
+                with cols[i % 2]:
+                    st.markdown(f"### Isomer {i+1}")
+                    
+                    # حساب الخصائص
                     Chem.AssignStereochemistry(iso, force=True)
                     rs_centers = Chem.FindMolChiralCenters(iso)
+                    allene_data = get_allene_config(iso)
                     
-                    # حساب الـ Ra/Sa للألينات
-                    allene_axes = detect_allene_axes(iso)
-                    allene_labels = []
-                    for ax in allene_axes:
-                        allene_labels.append(assign_allene_ra_sa(iso, ax))
-                    
-                    # تجميع الـ Label النهائي
-                    label = f"Isomer {i+1}\n"
-                    if rs_centers: label += f"Centers: {rs_centers}\n"
-                    if allene_labels: label += f"Allene: {allene_labels}"
+                    # كتابة البيانات
+                    st.write(f"**R/S Centers:** {rs_centers if rs_centers else 'None'}")
+                    if allene_data:
+                        st.info(f"**Axial Chirality:** {allene_data}")
                     
                     # عرض 2D
-                    with st.container():
-                        st.image(Draw.MolToImage(iso, legend=label, size=(300, 300)))
-                        # عرض 3D تحت كل صورة
-                        render_3d_safe(iso, f"3D Model {i+1}")
-    else:
-        st.warning("Please enter a name.")           
+                    st.image(Draw.MolToImage(iso, size=(400, 400)))
+                    
+                    # عرض 3D
+                    st.write("**Interactive 3D View:**")
+                    view = make_3d_viewer(iso)
+                    showmol(view, height=300, width=400)
+                    st.divider()
+                    
+    except Exception as e:
+        st.error(f"Error: {e}")
