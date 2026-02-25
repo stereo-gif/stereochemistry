@@ -1,7 +1,5 @@
-streamlit
-pubchempy
 rdkit
-stmol
+pubchempy
 py3Dmol
-ipywidgets==8.1.1
-ipython_genutils
+stmol
+numpy
