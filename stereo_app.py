@@ -125,4 +125,4 @@ if st.button("Run Analysis"):
                         # عرض 3D تحت كل صورة
                         render_3d_safe(iso, f"3D Model {i+1}")
     else:
-        st.warning("Please enter a name.")
+        st.warning("Please enter a name.")           
