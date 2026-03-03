@@ -1,52 +1,56 @@
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem import Draw
+from PIL import Image # عشان نضمن إن الصورة تفتح في أي نظام
 
 def render_smart_2d(mol):
-    # 1. نسخة من الموليكيول عشان الأصل ميتأثرش
+    # التأكد إن الموليكيول موجود أصلاً عشان ميديناش شاشة بيضا أو Error
+    if mol is None:
+        print("Error: Molecule object is None!")
+        return None
+
+    # 1. نسخة من الموليكيول
     m = Chem.Mol(mol)
-    
-    # التأكد من وجود ألين (C=C=C) لضبط التنسيق لاحقاً
     is_allene = m.HasSubstructMatch(Chem.MolFromSmarts("C=C=C"))
     
-    # 2. إضافة الهيدروجين ضروري جداً للألينات لظهور الـ Wedges بشكل صحيح
+    # 2. إضافة الهيدروجين (مهم جداً للـ Wedges)
     m = Chem.AddHs(m)
     
-    # 3. محاولة توليد إحداثيات 3D لمعرفة الـ Stereochemistry (خاصة الـ Axial)
-    if AllChem.EmbedMolecule(m, AllChem.ETKDG()) != -1:
-        # تحويل الـ 3D لـ 2D مع الحفاظ على الاتجاهات الفراغية
+    # 3. محاولة الـ 3D Embedding
+    # استخدمنا 5000 محاولة (maxAttempts) عشان نضمن إنه ميفشلش ويطلع شاشة بيضا
+    params = AllChem.ETKDG()
+    params.maxAttempts = 5000 
+    
+    if AllChem.EmbedMolecule(m, params) != -1:
         AllChem.Compute2DCoords(m)
-        # رسم الروابط بنظام المثلثات (Wedge/Dash) بناءً على الـ Conformer
         Chem.WedgeMolBonds(m, m.GetConformer())
     else:
-        # لو فشل الـ 3D (زي في الجزيئات العملاقة) نرسم 2D عادي
+        # لو فشل الـ 3D، بنرسم 2D عادي كخطة بديلة
         AllChem.Compute2DCoords(m)
 
-    # 4. إعدادات الرسم (Options)
+    # 4. إعدادات الرسم لزيادة الوضوح ومنع الـ Ra/Sa
     d_opts = Draw.MolDrawOptions()
+    d_opts.addStereoAnnotation = False  # حذف Ra, Sa, R, S
+    d_opts.prepareMolsBeforeDrawing = True # بيصلح الأخطاء الشائعة قبل الرسم
     
-    # --- حل مشكلة Ra / Sa و isomer 2 ---
-    d_opts.addStereoAnnotation = False  # ده اللي بيلغي الكتابة النصية فوق الذرات
-    
-    # ضبط الخطوط بناءً على نوع المركب
     if is_allene:
-        d_opts.bondLineWidth = 3.0    # خطوط سميكة للوضوح
+        d_opts.bondLineWidth = 3.0
         d_opts.minFontSize = 18
     else:
         d_opts.bondLineWidth = 1.6
         d_opts.minFontSize = 14
 
-    # 5. توليد الصورة النهائية
-    # الـ legend="" بتضمن إن مفيش أي اسم (زي Search Bitter) يظهر تحت أو فوق المركب
+    # 5. توليد الصورة بدون Legend (عشان نشيل كلمة Search Bitter)
     img = Draw.MolToImage(m, size=(500, 500), options=d_opts, legend="")
     
     return img
 
-# --- مثال لتشغيل الكود ---
-# سنستخدم ألين (Allene) كمثال لأنه الأصعب في الرسم
-smiles_string = "CC=C=CC" 
-test_mol = Chem.MolFromSmiles(smiles_string)
+# --- تجربة الكود ---
+# جرب تحط الـ SMILES بتاعك هنا مكان ده:
+smiles_input = "C/C=C\C" # مثال لمركب Cis-2-Butene (حسب دليلك المرجعي)
+my_mol = Chem.MolFromSmiles(smiles_input)
 
-if test_mol:
-    result_img = render_smart_2d(test_mol)
-    result_img.show() # هيفتح الصورة عندك على الجهاز
+image_result = render_smart_2d(my_mol)
+
+if image_result:
+    image_result.show() # هيفتح الصورة في عارض الصور الافتراضي بتاع الويندوز/الماك
